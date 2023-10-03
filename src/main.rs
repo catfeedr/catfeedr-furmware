@@ -1,19 +1,19 @@
 #![no_std]
 #![no_main]
 
-use rp_pico::entry;
 use embedded_hal::digital::v2::OutputPin;
-use rp_pico::hal::prelude::*;
-use rp_pico::hal::pac;
-use rp_pico::hal;
 use panic_halt as _;
+use rp_pico::entry;
+use rp_pico::hal;
+use rp_pico::hal::pac;
+use rp_pico::hal::prelude::*;
 
 #[entry]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
-        let clocks = hal::clocks::init_clocks_and_plls(
+    let clocks = hal::clocks::init_clocks_and_plls(
         rp_pico::XOSC_CRYSTAL_FREQ,
         pac.XOSC,
         pac.CLOCKS,
