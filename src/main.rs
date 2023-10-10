@@ -11,12 +11,14 @@ mod animal_tag;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
+use embassy_net::{Config as NetConfig, Stack, StackResources};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0, UART1, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::uart::{
-    Async, Config, DataBits, InterruptHandler as UartInterruptHandler, Parity, StopBits, UartRx,
+    Async, Config as UartConfig, DataBits, InterruptHandler as UartInterruptHandler, Parity,
+    StopBits, UartRx,
 };
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
 use embassy_time::{Duration, Timer};
@@ -72,10 +74,10 @@ async fn main(spawner: Spawner) {
     );
 
     let state = make_static!(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+    let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
     unwrap!(spawner.spawn(wifi_task(runner)));
 
-    let mut config = Config::default();
+    let mut config = UartConfig::default();
     config.baudrate = 9600;
     config.data_bits = DataBits::DataBits8;
     config.parity = Parity::ParityNone;
@@ -87,6 +89,39 @@ async fn main(spawner: Spawner) {
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
+
+    let seed = 0x0123_4567_89ab_cdef; // chosen by fair dice roll. guarenteed to be random.
+
+    let net_config = NetConfig::dhcpv4(Default::default());
+
+    let stack = &*make_static!(Stack::new(
+        net_device,
+        net_config,
+        make_static!(StackResources::<2>::new()),
+        seed
+    ));
+
+    unwrap!(spawner.spawn(net_task(stack)));
+
+    // TODO Move this
+    loop {
+        match control
+            .join_wpa2(include_str!("../ssid.txt"), include_str!("../password.txt"))
+            .await
+        {
+            Ok(_) => break,
+            Err(err) => {
+                log::info!("join failed with status={}", err.status);
+            }
+        }
+    }
+
+    // Wait for DHCP, not necessary when using static IP
+    log::info!("waiting for DHCP...");
+    while !stack.is_config_up() {
+        Timer::after(Duration::from_millis(100)).await;
+    }
+    log::info!("DHCP is now up!");
 
     let delay = Duration::from_secs(1);
     loop {
@@ -116,4 +151,9 @@ async fn reader(mut rx: UartRx<'static, UART1, Async>) {
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+}
+
+#[embassy_executor::task]
+async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
+    stack.run().await
 }
