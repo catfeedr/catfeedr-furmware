@@ -1,16 +1,15 @@
-//! This example test the RP Pico W on board LED.
-//!
-//! It does not work with the RP Pico board. See blinky.rs.
-
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
+#![feature(type_alias_impl_trait, async_fn_in_trait)]
 
 mod animal_tag;
 
+use cyw43::NetDriver;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
+use embassy_net::tcp::TcpSocket;
+use embassy_net::tcp::client::TcpClientState;
 use embassy_net::{Config as NetConfig, Stack, StackResources};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
@@ -22,7 +21,9 @@ use embassy_rp::uart::{
 };
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
 use embassy_time::{Duration, Timer};
-use embedded_io_async::Read;
+use futures::TryFutureExt;
+use rust_mqtt::client::client::MqttClient;
+use rust_mqtt::client::client_config::{ClientConfig, MqttVersion};
 use static_cell::make_static;
 
 use crate::animal_tag::AnimalTag;
@@ -122,6 +123,7 @@ async fn main(spawner: Spawner) {
         Timer::after(Duration::from_millis(100)).await;
     }
     log::info!("DHCP is now up!");
+    unwrap!(spawner.spawn(mqtt_task(stack)));
 
     let delay = Duration::from_secs(1);
     loop {
@@ -156,4 +158,65 @@ async fn logger_task(driver: Driver<'static, USB>) {
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
     stack.run().await
+}
+
+struct SocketWrapper<'a>(TcpSocket<'a>);
+#[derive(Debug)]
+struct DummyError;
+
+impl embedded_io::Error for DummyError {
+    fn kind(&self) -> embedded_io::ErrorKind {
+        embedded_io::ErrorKind::Other
+    }
+}
+
+impl<'a> embedded_io::Io for SocketWrapper<'a> {
+    type Error = DummyError;
+}
+
+impl<'a> embedded_io::asynch::Read for SocketWrapper<'a> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        embedded_io_async::Read::read(&mut self.0, buf).await.map_err(|_| DummyError)
+    }
+}
+
+impl<'a> embedded_io::asynch::Write for SocketWrapper<'a> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        embedded_io_async::Write::write(&mut self.0, buf).await.map_err(|_| DummyError)
+    }
+}
+
+#[embassy_executor::task]
+async fn mqtt_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+    let mut tx_buffer = [0u8; 4096];
+    let mut rx_buffer = [0u8; 4096];
+    let mut buffer = [0u8; 4096];
+    let mut recv_buffer = [0u8; 4096];
+    let rng = rand::rngs::mock::StepRng::new(0, 1024);
+    let mut network_driver = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    let ip = embassy_net::IpAddress::v4(192, 168, 1, 199);
+    if let Err(_) = network_driver.connect((ip, 1883)).await {
+        log::error!("Could not connect to socket");
+        return;
+    }
+    let config: ClientConfig<'_, 10, rand::rngs::mock::StepRng> = ClientConfig::new(MqttVersion::MQTTv5, rng);
+    let mut client = MqttClient::new(SocketWrapper(network_driver), &mut buffer, 4096, &mut recv_buffer, 0, config);
+    if let Err(_) = client.connect_to_broker().await {
+        log::error!("Could not connect to broker");
+        return;
+    }
+    let delay = Duration::from_secs(1);
+    loop {
+        if let Err(_) = client
+            .send_message(
+                "helo",
+                b"hello",
+                rust_mqtt::packet::v5::publish_packet::QualityOfService::QoS0,
+                true,
+            )
+            .await {
+                log::error!("Could not send message");
+            }
+        Timer::after(delay).await;
+    }
 }

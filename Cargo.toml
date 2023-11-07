@@ -52,6 +52,8 @@ log = "0.4"
 pio-proc = "0.2"
 pio = "0.2.1"
 rand = { version = "0.8.5", default-features = false }
+rust-mqtt = { version = "0.1.5", default-features = false, features = ["no_std"] }
+embedded-io = "0.4.0"
 
 [profile.release]
 debug = 2
