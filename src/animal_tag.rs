@@ -28,9 +28,11 @@ impl AnimalTag {
 
 impl From<[u8; 30]> for AnimalTag {
     fn from(value: [u8; 30]) -> Self {
-        let mut tag = AnimalTag::default();
+        let mut tag = AnimalTag {
+            head: value[0],
+            ..Default::default()
+        };
 
-        tag.head = value[0];
         tag.card_number.copy_from_slice(&value[1..11]);
         tag.country_id.copy_from_slice(&value[11..15]);
         tag.data = value[15];

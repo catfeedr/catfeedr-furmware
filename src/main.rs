@@ -1,7 +1,3 @@
-//! This example test the RP Pico W on board LED.
-//!
-//! It does not work with the RP Pico board. See blinky.rs.
-
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
@@ -12,7 +8,6 @@ mod net_logger;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::select::{self, select};
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config as NetConfig, Ipv4Address, Stack, StackResources};
 use embassy_rp::bind_interrupts;
@@ -24,11 +19,10 @@ use embassy_rp::uart::{
     StopBits, UartRx,
 };
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
-use embassy_sync::channel::Sender;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
-use embedded_io_async::{Read, Write};
+use embedded_io_async::Write;
 use static_cell::make_static;
 
 use crate::animal_tag::AnimalTag;
@@ -65,9 +59,6 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let fw = include_bytes!("../embassy/cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../embassy/cyw43-firmware/43439A0_clm.bin");
-
-    let driver = Driver::new(p.USB, UsbIrqs);
-    //spawner.spawn(usb_logger_task(driver)).unwrap();
 
     let pwr = Output::new(p.PIN_23, Level::Low);
     let cs = Output::new(p.PIN_25, Level::High);
@@ -117,7 +108,10 @@ async fn main(spawner: Spawner) {
     // TODO Move this
     loop {
         match control
-            .join_wpa2(include_str!("../cfg/ssid.txt"), include_str!("../cfg/password.txt"))
+            .join_wpa2(
+                include_str!("../cfg/ssid.txt"),
+                include_str!("../cfg/password.txt"),
+            )
             .await
         {
             Ok(_) => break,
@@ -178,13 +172,7 @@ async fn net_logger_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
     let socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    run!(
-        1024,
-        socket,
-        log::LevelFilter::Info,
-        REMOTE_ENDPOINT,
-        6667
-    );
+    run!(1024, socket, log::LevelFilter::Info, REMOTE_ENDPOINT, 6667);
 }
 
 #[embassy_executor::task]
@@ -203,8 +191,7 @@ async fn tcp_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
         let remote_endpoint = (REMOTE_ENDPOINT, 6666);
         log::info!("connecting to {:?}...", remote_endpoint);
-        let r = socket.connect(remote_endpoint).await;
-        if let Err(_) = r {
+        if socket.connect(remote_endpoint).await.is_err() {
             log::error!("failed to connect");
             socket.close();
             continue 'reconnect;

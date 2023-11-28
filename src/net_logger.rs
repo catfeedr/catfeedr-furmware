@@ -1,9 +1,6 @@
-#![no_std]
 use core::fmt::Write as _;
 
-use embassy_futures::join::join;
-use embassy_net::{tcp::TcpSocket, Ipv4Address, Stack};
-use embassy_rp::pac::common::W;
+use embassy_net::{tcp::TcpSocket, Ipv4Address};
 use embassy_sync::pipe::Pipe;
 use log::{Metadata, Record};
 
@@ -28,8 +25,7 @@ impl<const N: usize> NetLogger<N> {
         const MAX_PACKET_SIZE: u16 = 1024;
         socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
         let remote_endpoint = (address, port);
-        let r = socket.connect(remote_endpoint).await;
-        if let Err(_) = r {
+        if socket.connect(remote_endpoint).await.is_err() {
             socket.close();
         }
 
@@ -67,7 +63,7 @@ impl<'d, const N: usize> core::fmt::Write for Writer<'d, N> {
 #[macro_export]
 macro_rules! run {
     ( $x:expr, $s:expr, $l:expr, $a:expr, $p:expr) => {
-        static LOGGER: crate::net_logger::NetLogger<$x> = crate::net_logger::NetLogger::new();
+        static LOGGER: $crate::net_logger::NetLogger<$x> = $crate::net_logger::NetLogger::new();
         unsafe {
             let _ = ::log::set_logger_racy(&LOGGER).map(|()| log::set_max_level_racy($l));
         }
