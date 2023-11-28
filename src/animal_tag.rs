@@ -1,11 +1,15 @@
-use heapless::String;
+use core::convert;
+
+use alloc::borrow::{Cow, ToOwned};
+use alloc::format;
+use alloc::string::String;
 
 #[repr(C)]
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub struct AnimalTag {
     head: u8,
-    card_number: [u8; 10],
-    country_id: [u8; 4],
+    pub card_number: u64,
+    country_id: u32,
     data: u8,
     animal_flag: u8,
     _reserved: [u8; 4],
@@ -14,15 +18,23 @@ pub struct AnimalTag {
     tail: u8,
 }
 
+fn convert_dumb_thing_to_number(dumb_thing: &[u8]) -> u64 {
+    // SAFETY: The format is ASCII-based, so reversing the bytes is still valid UTF-8.
+    unsafe {
+        let mut s = String::from_utf8_unchecked(dumb_thing.to_vec());
+        s.as_bytes_mut().reverse();
+        u64::from_str_radix(&s, 16).unwrap_or_default()
+    }
+}
+
 impl AnimalTag {
-    pub fn card_number(&self) -> String<10> {
-        let mut buf = String::<10>::new();
-
-        for hex_num in self.card_number.iter().rev() {
-            let _ = buf.push(*hex_num as char);
-        }
-
-        buf
+    pub fn id(&self) -> String {
+        format!(
+            "{}-{:0width$}",
+            self.country_id,
+            self.card_number,
+            width = 12
+        )
     }
 }
 
@@ -33,8 +45,10 @@ impl From<[u8; 30]> for AnimalTag {
             ..Default::default()
         };
 
-        tag.card_number.copy_from_slice(&value[1..11]);
-        tag.country_id.copy_from_slice(&value[11..15]);
+        tag.card_number = convert_dumb_thing_to_number(&value[1..11]);
+        tag.country_id = convert_dumb_thing_to_number(&value[11..15]) as u32;
+        //tag.country_id.copy_from_slice(&value[11..15]);
+        //tag.country_id.reverse();
         tag.data = value[15];
         tag.animal_flag = value[16];
         tag._reserved.copy_from_slice(&value[17..21]);
