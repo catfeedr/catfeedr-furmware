@@ -7,13 +7,14 @@
 #![feature(type_alias_impl_trait)]
 
 mod animal_tag;
+mod net_logger;
 
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::select::{self, select};
 use embassy_net::tcp::TcpSocket;
-use embassy_net::{Config as NetConfig, Stack, StackResources, Ipv4Address};
+use embassy_net::{Config as NetConfig, Ipv4Address, Stack, StackResources};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0, UART1, USB};
@@ -23,7 +24,7 @@ use embassy_rp::uart::{
     StopBits, UartRx,
 };
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
-use embassy_sync::blocking_mutex::raw::{NoopRawMutex, CriticalSectionRawMutex};
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::Sender;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
@@ -65,7 +66,7 @@ async fn main(spawner: Spawner) {
     let clm = include_bytes!("../embassy/cyw43-firmware/43439A0_clm.bin");
 
     let driver = Driver::new(p.USB, UsbIrqs);
-    spawner.spawn(logger_task(driver)).unwrap();
+    //spawner.spawn(usb_logger_task(driver)).unwrap();
 
     let pwr = Output::new(p.PIN_23, Level::Low);
     let cs = Output::new(p.PIN_25, Level::High);
@@ -106,7 +107,7 @@ async fn main(spawner: Spawner) {
     let stack = &*make_static!(Stack::new(
         net_device,
         net_config,
-        make_static!(StackResources::<2>::new()),
+        make_static!(StackResources::<3>::new()),
         seed
     ));
 
@@ -126,11 +127,14 @@ async fn main(spawner: Spawner) {
     }
 
     // Wait for DHCP, not necessary when using static IP
-    log::info!("waiting for DHCP...");
+    //log::info!("waiting for DHCP...");
     while !stack.is_config_up() {
         Timer::after(Duration::from_millis(100)).await;
     }
-    log::info!("DHCP is now up!");
+    //log::info!("DHCP is now up!");
+
+    spawner.spawn(net_logger_task(stack)).unwrap();
+    // Timer::after(Duration::from_secs(10)).await; // Allow for time logger to up
 
     unwrap!(spawner.spawn(tcp_task(stack)));
 
@@ -139,8 +143,11 @@ async fn main(spawner: Spawner) {
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
 
+        log::info!("LED ON");
+
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
+        log::info!("LED OFF");
     }
 }
 
@@ -161,8 +168,22 @@ async fn reader(mut rx: UartRx<'static, UART1, Async>) {
 }
 
 #[embassy_executor::task]
-async fn logger_task(driver: Driver<'static, USB>) {
+async fn usb_logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+}
+
+#[embassy_executor::task]
+async fn net_logger_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    run!(
+        1024,
+        socket,
+        log::LevelFilter::Info,
+        Ipv4Address::new(192, 168, 1, 199),
+        6667
+    );
 }
 
 #[embassy_executor::task]
@@ -191,7 +212,11 @@ async fn tcp_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
 
         loop {
             tag = tag.or(Some(TAG_SIGNAL.wait().await));
-            if socket.write_all(tag.unwrap().card_number().as_bytes()).await.is_err() {
+            if socket
+                .write_all(tag.unwrap().card_number().as_bytes())
+                .await
+                .is_err()
+            {
                 log::error!("Could not write tag. Reconnecting.");
                 socket.close();
                 continue 'reconnect;
