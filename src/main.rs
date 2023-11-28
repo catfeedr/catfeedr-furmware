@@ -58,6 +58,7 @@ async fn wifi_task(
 }
 
 static TAG_SIGNAL: Signal<CriticalSectionRawMutex, AnimalTag> = Signal::new();
+const REMOTE_ENDPOINT: Ipv4Address = include!("../cfg/ip.rs.inc");
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -116,7 +117,7 @@ async fn main(spawner: Spawner) {
     // TODO Move this
     loop {
         match control
-            .join_wpa2(include_str!("../ssid.txt"), include_str!("../password.txt"))
+            .join_wpa2(include_str!("../cfg/ssid.txt"), include_str!("../cfg/password.txt"))
             .await
         {
             Ok(_) => break,
@@ -181,7 +182,7 @@ async fn net_logger_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         1024,
         socket,
         log::LevelFilter::Info,
-        Ipv4Address::new(192, 168, 1, 199),
+        REMOTE_ENDPOINT,
         6667
     );
 }
@@ -200,7 +201,7 @@ async fn tcp_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
 
         socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
-        let remote_endpoint = (Ipv4Address::new(192, 168, 1, 199), 6666);
+        let remote_endpoint = (REMOTE_ENDPOINT, 6666);
         log::info!("connecting to {:?}...", remote_endpoint);
         let r = socket.connect(remote_endpoint).await;
         if let Err(_) = r {
