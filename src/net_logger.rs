@@ -2,6 +2,7 @@ use core::fmt::Write as _;
 
 use embassy_net::{tcp::TcpSocket, Ipv4Address};
 use embassy_sync::pipe::Pipe;
+use embassy_time::{Duration, Timer};
 use log::{Metadata, Record};
 
 type CS = embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -23,16 +24,24 @@ impl<const N: usize> NetLogger<N> {
         Self: 'd,
     {
         const MAX_PACKET_SIZE: u16 = 1024;
-        socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
         let remote_endpoint = (address, port);
-        if socket.connect(remote_endpoint).await.is_err() {
-            socket.close();
-        }
+        'reconnect: loop {
+            if socket.connect(remote_endpoint).await.is_err() {
+                socket.close();
+                Timer::after(Duration::from_secs(1)).await;
+                continue 'reconnect;
+            }
 
-        let mut rx: [u8; MAX_PACKET_SIZE as usize] = [0; MAX_PACKET_SIZE as usize];
-        loop {
-            let len = self.buffer.read(&mut rx[..]).await;
-            let _ = socket.write(&rx[..len]).await;
+            log::info!("Logger is up");
+
+            let mut rx: [u8; MAX_PACKET_SIZE as usize] = [0; MAX_PACKET_SIZE as usize];
+            loop {
+                let len = self.buffer.read(&mut rx[..]).await;
+                if socket.write(&rx[..len]).await.is_err() {
+                    Timer::after(Duration::from_secs(1)).await;
+                    continue 'reconnect;
+                }
+            }
         }
     }
 }

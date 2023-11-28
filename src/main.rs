@@ -188,12 +188,12 @@ async fn tcp_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         let mut tx_buffer = [0; 4096];
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
 
-        socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
         let remote_endpoint = (REMOTE_ENDPOINT, 6666);
         log::info!("connecting to {:?}...", remote_endpoint);
         if socket.connect(remote_endpoint).await.is_err() {
             log::error!("failed to connect");
             socket.close();
+            Timer::after(Duration::from_secs(1)).await;
             continue 'reconnect;
         }
         log::info!("connected!");
