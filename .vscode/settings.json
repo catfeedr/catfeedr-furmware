@@ -1,0 +1,10 @@
+{
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    },
+    "rust-analyzer.cargo.target": "thumbv6m-none-eabi",
+    "rust-analyzer.files.excludeDirs": ["embassy"],
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.allTargets": false
+}
