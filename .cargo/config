@@ -4,5 +4,9 @@ runner = "elf2uf2-rs -d"
 [build]
 target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
 
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+
 [env]
 DEFMT_LOG = "debug"

@@ -2,9 +2,12 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
+mod allocator;
 mod animal_tag;
 mod net_logger;
 
+extern crate alloc;
+use alloc::boxed::Box;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
@@ -135,6 +138,7 @@ async fn main(spawner: Spawner) {
 
     let delay = Duration::from_secs(1);
     loop {
+        let b = Box::new(42);
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
 
@@ -143,6 +147,7 @@ async fn main(spawner: Spawner) {
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
         log::info!("LED OFF");
+        drop(b);
     }
 }
 
