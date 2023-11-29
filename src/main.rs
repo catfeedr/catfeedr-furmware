@@ -101,7 +101,7 @@ async fn main(spawner: Spawner) {
     let stack = &*make_static!(Stack::new(
         net_device,
         net_config,
-        make_static!(StackResources::<3>::new()),
+        make_static!(StackResources::<4>::new()),
         seed
     ));
 
@@ -133,9 +133,11 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net_logger_task(stack)).unwrap();
     // Timer::after(Duration::from_secs(10)).await; // Allow for time logger to up
 
-    unwrap!(spawner.spawn(tcp_task(stack)));
+    unwrap!(spawner.spawn(api_response_task(stack)));
+    unwrap!(spawner.spawn(api_receive_task(stack)));
 
     let delay = Duration::from_secs(1);
+
     loop {
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
@@ -183,7 +185,37 @@ async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn tcp_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+async fn api_receive_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let mut mb_buf = [0; 4096];
+    let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    if let Err(e) = socket.accept(6668).await {
+        log::info!("Error could not accept socket connection");
+    }
+
+    loop {
+        let n = match socket.read(&mut mb_buf).await {
+            Ok(0) => {
+                log::info!("read EOF");
+                break;
+            }
+            Ok(n) => n,
+            Err(e) => {
+                log::info!("{:?}", e);
+                break;
+            }
+        };
+
+        if let Err(e) = socket.write_all(&mb_buf[..n]).await {
+            log::info!("write error: {:?}", e);
+            break;
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn api_response_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     let mut tag: Option<AnimalTag> = None;
     'reconnect: loop {
         let mut rx_buffer = [0; 4096];

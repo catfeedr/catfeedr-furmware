@@ -32,7 +32,7 @@ impl<const N: usize> NetLogger<N> {
                 continue 'reconnect;
             }
 
-            log::info!("Logger is up");
+            log::info!("Logger is up: {}", socket.local_endpoint().unwrap().addr);
 
             let mut rx: [u8; MAX_PACKET_SIZE as usize] = [0; MAX_PACKET_SIZE as usize];
             loop {
