@@ -1,6 +1,3 @@
-use core::convert;
-
-use alloc::borrow::{Cow, ToOwned};
 use alloc::format;
 use alloc::string::String;
 
@@ -47,8 +44,6 @@ impl From<[u8; 30]> for AnimalTag {
 
         tag.card_number = convert_dumb_thing_to_number(&value[1..11]);
         tag.country_id = convert_dumb_thing_to_number(&value[11..15]) as u32;
-        //tag.country_id.copy_from_slice(&value[11..15]);
-        //tag.country_id.reverse();
         tag.data = value[15];
         tag.animal_flag = value[16];
         tag._reserved.copy_from_slice(&value[17..21]);

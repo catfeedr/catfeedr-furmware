@@ -1,9 +1,11 @@
 use core::fmt::Write as _;
 
-use embassy_net::{tcp::TcpSocket, Ipv4Address};
+use embassy_net::{tcp::TcpSocket, Ipv4Address, Stack};
 use embassy_sync::pipe::Pipe;
 use embassy_time::{Duration, Timer};
 use log::{Metadata, Record};
+
+use crate::tasks;
 
 type CS = embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
@@ -53,7 +55,14 @@ impl<const N: usize> log::Log for NetLogger<N> {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            let _ = write!(Writer(&self.buffer), "{}\r\n", record.args());
+            let _ = write!(
+                Writer(&self.buffer),
+                "[{}] ({}:{}): {}\r\n",
+                record.level(),
+                record.file().unwrap_or("<unknown file>"),
+                record.line().unwrap_or_default(),
+                record.args()
+            );
         }
     }
 
@@ -78,4 +87,18 @@ macro_rules! run {
         }
         let _ = LOGGER.run($s, $a, $p).await;
     };
+}
+
+#[embassy_executor::task]
+pub async fn net_logger_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    run!(
+        1024,
+        socket,
+        log::LevelFilter::Info,
+        tasks::REMOTE_ENDPOINT,
+        6667
+    );
 }

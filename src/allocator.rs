@@ -53,6 +53,14 @@ unsafe impl GlobalAlloc for BumpAllocatorRef {
                 return core::ptr::null_mut(); // out of memory
             }
 
+            if alloc_end > alloc.borrow().heap.len() / 2 {
+                log::warn!("More than 50% memory used after allocation.");
+            } else if alloc_end > 3 * (alloc.borrow().heap.len() / 4) {
+                log::warn!("More than 75% memory used after allocation.",);
+            } else if alloc_end > 15 * (alloc.borrow().heap.len() / 16) {
+                log::warn!("Almost out of memory!");
+            }
+
             alloc.borrow_mut().next += layout.size();
             alloc.borrow_mut().allocations += 1;
             alloc.borrow_mut().heap[alloc_start..alloc_end].as_mut_ptr()

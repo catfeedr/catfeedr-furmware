@@ -5,29 +5,26 @@
 mod allocator;
 mod animal_tag;
 mod net_logger;
+mod tasks;
 
 extern crate alloc;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_net::tcp::TcpSocket;
-use embassy_net::{Config as NetConfig, Ipv4Address, Stack, StackResources};
+use embassy_net::{Config as NetConfig, Stack, StackResources};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0, UART1, USB};
+use embassy_rp::peripherals::{PIO0, UART1};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::uart::{
-    Async, Config as UartConfig, DataBits, InterruptHandler as UartInterruptHandler, Parity,
-    StopBits, UartRx,
+    Config as UartConfig, DataBits, InterruptHandler as UartInterruptHandler, Parity, StopBits,
+    UartRx,
 };
-use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::signal::Signal;
+
 use embassy_time::{Duration, Timer};
-use embedded_io_async::Write;
 use static_cell::make_static;
 
-use crate::animal_tag::AnimalTag;
+use crate::net_logger::net_logger_task;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -37,24 +34,6 @@ bind_interrupts!(struct Irqs {
 bind_interrupts!(struct UartIrqs {
     UART1_IRQ => UartInterruptHandler<UART1>;
 });
-
-bind_interrupts!(struct UsbIrqs {
-    USBCTRL_IRQ => UsbInterruptHandler<USB>;
-});
-
-#[embassy_executor::task]
-async fn wifi_task(
-    runner: cyw43::Runner<
-        'static,
-        Output<'static, PIN_23>,
-        PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>,
-    >,
-) -> ! {
-    runner.run().await
-}
-
-static TAG_SIGNAL: Signal<CriticalSectionRawMutex, AnimalTag> = Signal::new();
-const REMOTE_ENDPOINT: Ipv4Address = include!("../cfg/ip.rs.inc");
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -77,17 +56,7 @@ async fn main(spawner: Spawner) {
 
     let state = make_static!(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
-    unwrap!(spawner.spawn(wifi_task(runner)));
-
-    let mut config = UartConfig::default();
-    config.baudrate = 9600;
-    config.data_bits = DataBits::DataBits8;
-    config.parity = Parity::ParityNone;
-    config.stop_bits = StopBits::STOP2;
-    let uart_rx = UartRx::new(p.UART1, p.PIN_5, UartIrqs, p.DMA_CH1, config);
-    unwrap!(spawner.spawn(reader(uart_rx)));
-
-    Timer::after(Duration::from_secs(3)).await; // Allow for time to connect to serial
+    unwrap!(spawner.spawn(tasks::wifi_task(runner)));
 
     control.init(clm).await;
     control
@@ -105,7 +74,7 @@ async fn main(spawner: Spawner) {
         seed
     ));
 
-    unwrap!(spawner.spawn(net_task(stack)));
+    unwrap!(spawner.spawn(tasks::net_task(stack)));
 
     // TODO Move this
     loop {
@@ -124,126 +93,29 @@ async fn main(spawner: Spawner) {
     }
 
     // Wait for DHCP, not necessary when using static IP
-    //log::info!("waiting for DHCP...");
     while !stack.is_config_up() {
         Timer::after(Duration::from_millis(100)).await;
     }
-    //log::info!("DHCP is now up!");
 
     spawner.spawn(net_logger_task(stack)).unwrap();
-    // Timer::after(Duration::from_secs(10)).await; // Allow for time logger to up
 
-    unwrap!(spawner.spawn(api_response_task(stack)));
-    unwrap!(spawner.spawn(api_receive_task(stack)));
+    let mut config = UartConfig::default();
+    config.baudrate = 9600;
+    config.data_bits = DataBits::DataBits8;
+    config.parity = Parity::ParityNone;
+    config.stop_bits = StopBits::STOP2;
+    let uart_rx = UartRx::new(p.UART1, p.PIN_5, UartIrqs, p.DMA_CH1, config);
+    unwrap!(spawner.spawn(tasks::tag_reader_task(uart_rx)));
+
+    unwrap!(spawner.spawn(tasks::api::response_task(stack)));
+    unwrap!(spawner.spawn(tasks::api::receive_task(stack)));
 
     let delay = Duration::from_secs(1);
 
     loop {
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
-
-        log::info!("LED ON");
-
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
-        log::info!("LED OFF");
-    }
-}
-
-#[embassy_executor::task]
-async fn reader(mut rx: UartRx<'static, UART1, Async>) {
-    info!("reading");
-    let delay = Duration::from_secs(1);
-    loop {
-        let mut buf = [0u8; 30];
-        rx.read(&mut buf).await.unwrap();
-        log::info!("RX: {:?}", buf);
-
-        let tag: AnimalTag = buf.into(); //unsafe { core::mem::transmute_copy(&buf) };
-        log::info!("Card number: {}", tag.id());
-        TAG_SIGNAL.signal(tag);
-        Timer::after(delay).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn usb_logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
-}
-
-#[embassy_executor::task]
-async fn net_logger_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    run!(1024, socket, log::LevelFilter::Info, REMOTE_ENDPOINT, 6667);
-}
-
-#[embassy_executor::task]
-async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
-    stack.run().await
-}
-
-#[embassy_executor::task]
-async fn api_receive_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let mut mb_buf = [0; 4096];
-    let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    if let Err(e) = socket.accept(6668).await {
-        log::info!("Error could not accept socket connection");
-    }
-
-    loop {
-        let n = match socket.read(&mut mb_buf).await {
-            Ok(0) => {
-                log::info!("read EOF");
-                break;
-            }
-            Ok(n) => n,
-            Err(e) => {
-                log::info!("{:?}", e);
-                break;
-            }
-        };
-
-        if let Err(e) = socket.write_all(&mb_buf[..n]).await {
-            log::info!("write error: {:?}", e);
-            break;
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn api_response_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
-    let mut tag: Option<AnimalTag> = None;
-    'reconnect: loop {
-        let mut rx_buffer = [0; 4096];
-        let mut tx_buffer = [0; 4096];
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-
-        let remote_endpoint = (REMOTE_ENDPOINT, 6666);
-        log::info!("connecting to {:?}...", remote_endpoint);
-        if socket.connect(remote_endpoint).await.is_err() {
-            log::error!("failed to connect");
-            socket.close();
-            Timer::after(Duration::from_secs(1)).await;
-            continue 'reconnect;
-        }
-        log::info!("connected!");
-
-        loop {
-            tag = tag.or(Some(TAG_SIGNAL.wait().await));
-            if socket
-                .write_all(tag.unwrap().id().as_bytes())
-                .await
-                .is_err()
-            {
-                log::error!("Could not write tag. Reconnecting.");
-                socket.close();
-                continue 'reconnect;
-            }
-            tag = None;
-        }
     }
 }
