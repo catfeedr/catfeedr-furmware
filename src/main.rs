@@ -7,7 +7,6 @@ mod animal_tag;
 mod net_logger;
 
 extern crate alloc;
-use alloc::boxed::Box;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
@@ -138,7 +137,6 @@ async fn main(spawner: Spawner) {
 
     let delay = Duration::from_secs(1);
     loop {
-        let b = Box::new(42);
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
 
@@ -147,7 +145,6 @@ async fn main(spawner: Spawner) {
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
         log::info!("LED OFF");
-        drop(b);
     }
 }
 
@@ -160,8 +157,8 @@ async fn reader(mut rx: UartRx<'static, UART1, Async>) {
         rx.read(&mut buf).await.unwrap();
         log::info!("RX: {:?}", buf);
 
-        let tag: AnimalTag = unsafe { core::mem::transmute_copy(&buf) };
-        log::info!("Card number: {}", tag.card_number().as_str());
+        let tag: AnimalTag = buf.into(); //unsafe { core::mem::transmute_copy(&buf) };
+        log::info!("Card number: {}", tag.id());
         TAG_SIGNAL.signal(tag);
         Timer::after(delay).await;
     }
@@ -206,7 +203,7 @@ async fn tcp_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         loop {
             tag = tag.or(Some(TAG_SIGNAL.wait().await));
             if socket
-                .write_all(tag.unwrap().card_number().as_bytes())
+                .write_all(tag.unwrap().id().as_bytes())
                 .await
                 .is_err()
             {

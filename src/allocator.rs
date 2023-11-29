@@ -2,26 +2,23 @@ use core::alloc::GlobalAlloc;
 
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 
-pub const HEAP_START: usize = 0x20000000 + 192 * 1024;
 pub const HEAP_SIZE: usize = 64 * 1024;
 
 #[global_allocator]
 static ALLOCATOR: BumpAllocatorRef = BumpAllocatorRef::new();
 
 pub struct BumpAllocator {
-    heap_start: usize,
-    heap_end: usize,
     next: usize,
     allocations: usize,
+    heap: [u8; HEAP_SIZE],
 }
 
 impl BumpAllocator {
     pub const fn new() -> Self {
         Self {
-            heap_start: HEAP_START,
-            heap_end: HEAP_SIZE + HEAP_START,
             next: 0,
             allocations: 0,
+            heap: [0u8; HEAP_SIZE],
         }
     }
 }
@@ -52,13 +49,13 @@ unsafe impl GlobalAlloc for BumpAllocatorRef {
                 None => return core::ptr::null_mut(),
             };
 
-            if alloc_end > alloc.borrow().heap_end {
+            if alloc_end > alloc.borrow().heap.len() {
                 return core::ptr::null_mut(); // out of memory
             }
 
             alloc.borrow_mut().next += layout.size();
             alloc.borrow_mut().allocations += 1;
-            alloc_start as *mut u8
+            alloc.borrow_mut().heap[alloc_start..alloc_end].as_mut_ptr()
         })
     }
 
@@ -66,7 +63,7 @@ unsafe impl GlobalAlloc for BumpAllocatorRef {
         self.0.lock(|alloc| {
             alloc.borrow_mut().allocations -= 1;
             if alloc.borrow().allocations == 0 {
-                alloc.borrow_mut().next = alloc.borrow().heap_start;
+                alloc.borrow_mut().next = 0;
             }
         })
     }
