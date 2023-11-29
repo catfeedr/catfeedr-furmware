@@ -2,9 +2,11 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
+mod allocator;
 mod animal_tag;
 mod net_logger;
 
+extern crate alloc;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
@@ -155,8 +157,8 @@ async fn reader(mut rx: UartRx<'static, UART1, Async>) {
         rx.read(&mut buf).await.unwrap();
         log::info!("RX: {:?}", buf);
 
-        let tag: AnimalTag = unsafe { core::mem::transmute_copy(&buf) };
-        log::info!("Card number: {}", tag.card_number().as_str());
+        let tag: AnimalTag = buf.into(); //unsafe { core::mem::transmute_copy(&buf) };
+        log::info!("Card number: {}", tag.id());
         TAG_SIGNAL.signal(tag);
         Timer::after(delay).await;
     }
@@ -201,7 +203,7 @@ async fn tcp_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         loop {
             tag = tag.or(Some(TAG_SIGNAL.wait().await));
             if socket
-                .write_all(tag.unwrap().card_number().as_bytes())
+                .write_all(tag.unwrap().id().as_bytes())
                 .await
                 .is_err()
             {
