@@ -1,3 +1,4 @@
+use alloc::format;
 use embassy_net::{tcp::TcpSocket, Stack};
 use embassy_time::{Duration, Timer};
 use embedded_io_async::Write;
@@ -9,32 +10,57 @@ pub async fn receive_task(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
     let mut mb_buf = [0; 4096];
-    let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    if let Err(e) = socket.accept(6668).await {
-        log::error!("Could not accept socket connection: {e:?}");
-    }
-
-    if let Some(endpoint) = socket.remote_endpoint() {
-        log::info!("Accepted connection from {endpoint}");
-    }
-
     loop {
+        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+        if let Err(e) = socket.accept(6668).await {
+            log::error!("Could not accept socket connection: {e:?}");
+            socket.close();
+            continue;
+        }
+
+        if let Some(endpoint) = socket.remote_endpoint() {
+            log::info!("Accepted connection from {endpoint}");
+        } else {
+            log::error!("Could not get remote endpoint");
+            socket.close();
+            continue;
+        }
+
         let n = match socket.read(&mut mb_buf).await {
             Ok(0) => {
                 log::info!("read EOF");
-                break;
+                socket.close();
+                continue;
             }
-            Ok(n) => n,
+            Ok(n) => {
+                log::info!("Received {n} bytes");
+                let mut req_headers = [httparse::EMPTY_HEADER; 16];
+                let mut req = httparse::Request::new(&mut req_headers);
+                let Ok(_) = req.parse(&mb_buf[..n]) else {
+                    log::error!("Could not parse HTTP request");
+                    continue;
+                };
+                let text = format!("You accessed {:?}!", req.path);
+                let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
+                let n = resp.as_bytes().len();
+                mb_buf[0..n].copy_from_slice(resp.as_bytes());
+                log::info!("Will send {n} bytes: {resp}");
+                n
+            }
             Err(e) => {
                 log::error!("{:?}", e);
-                break;
+                socket.close();
+                continue;
             }
         };
 
+        log::info!("Sending");
         if let Err(e) = socket.write_all(&mb_buf[..n]).await {
             log::error!("write error: {:?}", e);
-            break;
         }
+        log::info!("Sent");
+        let _ = socket.flush().await;
+        socket.close();
     }
 }
 

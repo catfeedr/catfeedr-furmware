@@ -52,6 +52,7 @@ log = "0.4"
 pio-proc = "0.2"
 pio = "0.2.1"
 rand = { version = "0.8.5", default-features = false }
+httparse = { version = "1.8.0", default-features = false }
 
 [profile.release]
 debug = 2
